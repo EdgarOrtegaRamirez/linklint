@@ -1,0 +1,4 @@
+linklint
+*.exe
+vendor/
+.DS_Store
