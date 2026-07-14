@@ -166,8 +166,8 @@ func (lc *LinkChecker) checkLink(link Link) Result {
 		}
 	}
 
-	// Skip empty or fragment-only URLs
-	if parsed.Path == "" && parsed.RawQuery == "" {
+	// Skip empty or fragment-only URLs (but allow root path /)
+	if parsed.Path == "" && parsed.RawQuery == "" && parsed.Host == "" {
 		return Result{
 			Link:     link.URL,
 			Source:   link.Source,
