@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -291,41 +294,8 @@ func GetSummary(results []Result) Summary {
 	return s
 }
 
-func main() {
-	fmt.Println("LinkLint - Broken Link Checker")
-	fmt.Println("================================")
-
-	checker := NewLinkChecker(10, 10*time.Second)
-	checker.SetMethod("GET")
-
-	// Simple link extraction from stdin or command-line URLs
-	var links []Link
-
-	if len(os.Args) > 1 {
-		// Command-line URLs
-		for _, rawURL := range os.Args[1:] {
-			links = append(links, Link{
-				URL:    rawURL,
-				Source: "<command-line>",
-			})
-		}
-	} else {
-		// Read from stdin
-		fmt.Println("Reading URLs from stdin (one per line, Ctrl+D to finish):")
-		fmt.Scanln() // consume newline
-	}
-
-	if len(links) == 0 {
-		fmt.Println("No URLs provided. Usage: linklint <url> [url2] ...")
-		os.Exit(1)
-	}
-
-	fmt.Printf("\nChecking %d links with concurrency %d...\n\n", len(links), checker.concurrency)
-
-	results := checker.Check(links)
-
-	// Print results
-	fmt.Printf("%-8s %-10s %s\n", "STATUS", "DURATION", "LINK")
+func printResults(results []Result) {
+	fmt.Printf("%-8s %-12s %s\n", "STATUS", "DURATION", "LINK")
 	fmt.Println(strings.Repeat("-", 80))
 
 	for _, r := range results {
@@ -337,11 +307,11 @@ func main() {
 		if r.Redirect {
 			durationStr += " ↪"
 		}
-		fmt.Printf("%-8s %-10s %s\n", statusStr, durationStr, r.Link)
+		fmt.Printf("%-8s %-12s %s\n", statusStr, durationStr, r.Link)
 	}
+}
 
-	// Print summary
-	summary := GetSummary(results)
+func printSummary(summary Summary) {
 	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("\nSummary:\n")
 	fmt.Printf("  Total:      %d\n", summary.Total)
@@ -352,9 +322,124 @@ func main() {
 	fmt.Printf("  Other:      %d\n", summary.Other)
 	fmt.Printf("  Duplicates: %d\n", summary.Duplicates)
 	fmt.Printf("  Avg Time:   %s\n", summary.AvgTime.Round(time.Millisecond))
+}
 
-	// Exit with error code if there are broken links
+func main() {
+	var concurrency int
+	var timeoutSec int
+	var method string
+	var allowHosts string
+	var exclude string
+	var outputFormat string
+
+	flag.IntVar(&concurrency, "concurrency", 10, "number of concurrent checks")
+	flag.IntVar(&timeoutSec, "timeout", 10, "timeout per check in seconds")
+	flag.StringVar(&method, "method", "HEAD", "HTTP method: HEAD or GET")
+	flag.StringVar(&allowHosts, "allow-hosts", "", "comma-separated allowed hostnames (default: all)")
+	flag.StringVar(&exclude, "exclude", "", "comma-separated URL patterns to exclude")
+	flag.StringVar(&outputFormat, "format", "text", "output format: text, json, csv")
+	flag.Parse()
+
+	checker := NewLinkChecker(concurrency, time.Duration(timeoutSec)*time.Second)
+	checker.SetMethod(method)
+
+	if allowHosts != "" {
+		for _, h := range strings.Split(allowHosts, ",") {
+			checker.AddAllowedHost(strings.TrimSpace(h))
+		}
+	}
+	if exclude != "" {
+		for _, p := range strings.Split(exclude, ",") {
+			checker.AddExclude(strings.TrimSpace(p))
+		}
+	}
+
+	var links []Link
+
+	if flag.NArg() > 0 {
+		for _, rawURL := range flag.Args() {
+			links = append(links, Link{
+				URL:    rawURL,
+				Source: "<command-line>",
+			})
+		}
+	} else if !isTerminal() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" {
+				links = append(links, Link{
+					URL:    line,
+					Source: "<stdin>",
+				})
+			}
+		}
+	}
+
+	if len(links) == 0 {
+		fmt.Fprintf(os.Stderr, "No URLs provided. Usage: linklint <url> [url2] ...\n")
+		fmt.Fprintln(os.Stderr, "   or: echo <url> | linklint")
+		fmt.Fprintln(os.Stderr, "Flags:")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	fmt.Printf("Checking %d links (concurrency=%d, method=%s)...\n\n", len(links), concurrency, method)
+
+	results := checker.Check(links)
+
+	switch outputFormat {
+	case "json":
+		printJSON(results)
+	case "csv":
+		printCSV(results)
+	default:
+		printResults(results)
+		printSummary(GetSummary(results))
+	}
+
+	summary := GetSummary(results)
 	if summary.ClientErr+summary.ServerErr > 0 {
 		os.Exit(1)
+	}
+}
+
+// isTerminal checks if stdin is a terminal
+func isTerminal() bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+func printJSON(results []Result) {
+	type JSONResult struct {
+		Link     string `json:"link"`
+		Source   string `json:"source"`
+		Status   int    `json:"status"`
+		Redirect bool   `json:"redirect,omitempty"`
+		Error    string `json:"error,omitempty"`
+		Duration string `json:"duration"`
+	}
+	js := make([]JSONResult, 0, len(results))
+	for _, r := range results {
+		js = append(js, JSONResult{
+			Link:     r.Link,
+			Source:   r.Source,
+			Status:   r.Status,
+			Redirect: r.Redirect,
+			Error:    r.Error,
+			Duration: r.Duration.Round(time.Millisecond).String(),
+		})
+	}
+	data, _ := json.MarshalIndent(js, "", "  ")
+	fmt.Println(string(data))
+}
+
+func printCSV(results []Result) {
+	fmt.Println("link,status,redirect,error,duration")
+	for _, r := range results {
+		fmt.Printf("%s,%d,%t,%s,%s\n", r.Link, r.Status, r.Redirect, r.Error, r.Duration.Round(time.Millisecond).String())
 	}
 }
