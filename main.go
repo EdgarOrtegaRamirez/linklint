@@ -31,15 +31,15 @@ type Result struct {
 
 // LinkChecker handles crawling and checking links
 type LinkChecker struct {
-	client    *http.Client
-	visited   map[string]bool
-	results   []Result
-	mu        sync.Mutex
+	client      *http.Client
+	visited     map[string]bool
+	results     []Result
+	mu          sync.Mutex
 	concurrency int
-	timeout   time.Duration
-	allowed   []string // allowed hostnames (empty = all)
-	exclude   []string // excluded patterns
-	method    string
+	timeout     time.Duration
+	allowed     []string // allowed hostnames (empty = all)
+	exclude     []string // excluded patterns
+	method      string
 }
 
 // NewLinkChecker creates a new LinkChecker
@@ -55,11 +55,11 @@ func NewLinkChecker(concurrency int, timeout time.Duration) *LinkChecker {
 				return nil
 			},
 		},
-		visited:   make(map[string]bool),
-		results:   make([]Result, 0),
+		visited:     make(map[string]bool),
+		results:     make([]Result, 0),
 		concurrency: concurrency,
-		timeout:   timeout,
-		method:    "HEAD",
+		timeout:     timeout,
+		method:      "HEAD",
 	}
 }
 
